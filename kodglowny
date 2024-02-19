@@ -1,0 +1,172 @@
+if (!require(ggplot2)) install.packages("ggplot2")
+if (!require(plotly)) install.packages("plotly")
+if (!require(shiny)) install.packages("shiny")
+if (!require(dplyr)) install.packages("dplyr")
+if (!require(readxl)) install.packages("readxl")
+
+library(shiny)
+library(readxl)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+
+# Funkcja do wczytywania co n-ty rekordu z plików .xlsx
+read_excel_files <- function(files, step) {
+  data_df <- data.frame()  # Inicjalizacja pustej ramki danych
+  
+  # Iteracja przez każdy wybrany plik
+  for (file in files$datapath) {
+    df <- read_excel(file, sheet = 1)  # Wczytanie arkusza danych
+    selected_rows <- seq(1, nrow(df), by = step)  # Wybór co n-ty rekordu
+    df_selected <- df[selected_rows, ]  # Wybranie odpowiednich rekordów
+    data_df <- rbind(data_df, df_selected)  # Połączenie danych
+  }
+  
+  return(data_df)
+}
+
+# Funkcja do generowania statystyk dla każdej kolumny
+generateStats <- function(data_df) {
+  stats_df <- data.frame(
+    Kolumna = colnames(data_df),
+    Typ = sapply(data_df, class),
+    Ilość = sapply(data_df, length),
+    Różnorodność = sapply(data_df, function(x) length(unique(x))),
+    Średnia = sapply(data_df, mean),
+    Minimum = sapply(data_df, min),
+    Maksimum = sapply(data_df, max),
+    Odchylenie_Standardowe = sapply(data_df, sd),
+    Mediana = sapply(data_df, median)
+  )
+  
+  return(stats_df)
+}
+
+# Funkcja do generowania formularza wyboru kolumn i typu wykresu
+chartForm <- function() {
+  fluidPage(
+    sidebarLayout(
+      sidebarPanel(
+        width = 4,  # Zmiana szerokości panelu bocznego
+        # Dodaj kontrolki do wyboru kolumn x i y
+        selectInput("xColumn", "Wybierz kolumnę X", ""),
+        selectInput("yColumn", "Wybierz kolumnę Y", ""),
+        
+        # Dodaj kontrolkę do wyboru rodzaju wykresu
+        selectInput("chartType", "Wybierz rodzaj wykresu",
+                    choices = c("Wykres punktowy" = "point", 
+                                "Wykres liniowy" = "line",
+                                "Wykres słupkowy" = "bar",
+                                "Wykres bąbelkowy" = "bubble",
+                                "Wykres kołowy" = "pie",
+                                "Wykres pudełkowy" = "box")),
+        
+        # Dodaj przycisk "Generuj"
+        actionButton("generateChart", "Generuj")
+      ),
+      mainPanel(
+        width = 8,
+        # Placeholder dla wykresu
+        plotlyOutput("generatedChart")
+      )
+    )
+  )
+}
+
+# Definicja interfejsu użytkownika (UI)
+ui <- fluidPage(
+  titlePanel("Generator wykresów na podstawie danych"),
+  sidebarLayout(
+    sidebarPanel(
+      # Dodaj kontrolkę do wczytywania plików
+      fileInput("file", "Wybierz plik(y) .xlsx", multiple = TRUE, accept = c(".xlsx")),
+      
+      # Dodaj kontrolkę do wyboru co który rekord ma być używany do generowania wykresu
+      numericInput("step", "Krok (co który rekord)", value = 60, min = 1),
+      
+      # Dodaj przycisk "Wykres" otwierający osobny formularz
+      actionButton("showChartForm", "Stwórz wykres")
+    ),
+    mainPanel(
+      # Dodaj zakładki
+      tabsetPanel(
+        tabPanel("Dane", tableOutput("table")),
+        tabPanel("Statystyki", tableOutput("statsTable"))
+      )
+    )
+  )
+)
+
+# Definicja serwera
+server <- function(input, output, session) {
+  data_df <- reactiveVal(NULL)
+  
+  # Reakcja na zmiany w kontrolce do wczytywania plików i kroku
+  observe({
+    # Sprawdź, czy pliki zostały wybrane
+    if (!is.null(input$file)) {
+      # Wczytaj pliki
+      data_df_temp <- read_excel_files(input$file, input$step)
+      data_df(data_df_temp)
+      
+      # Wyświetl dane w tabeli
+      output$table <- renderTable({
+        data_df_temp
+      })
+      
+      # Wygeneruj statystyki
+      stats_df <- generateStats(data_df_temp)
+      output$statsTable <- renderTable({
+        stats_df
+      })
+    }
+  })
+  
+  observeEvent(input$showChartForm, {
+    # Aktualizuj opcje wyboru kolumn x i y w formularzu
+    updateSelectInput(session, "xColumn", choices = colnames(data_df()))
+    updateSelectInput(session, "yColumn", choices = colnames(data_df()))
+    
+    showModal(modalDialog(
+      chartForm(),
+      title = "Formularz wyboru kolumn i typu wykresu",
+      easyClose = TRUE
+    ))
+  })
+  
+  # Funkcja do generowania wykresu
+  generateChart <- function(data_df) {
+    switch(input$chartType,
+           "point" = ggplot(data_df(), aes_string(x = input$xColumn, y = input$yColumn)) +
+             geom_point() +
+             labs(title = "Wykres punktowy", x = input$xColumn, y = input$yColumn) +
+             theme_minimal(),
+           "line" = ggplot(data_df(), aes_string(x = input$xColumn, y = input$yColumn)) +
+             geom_line() +
+             labs(title = "Wykres liniowy", x = input$xColumn, y = input$yColumn) +
+             theme_minimal(),
+           "bar" = ggplot(data_df(), aes_string(x = input$xColumn, y = input$yColumn)) +
+             geom_bar(stat = "identity") +
+             labs(title = "Wykres słupkowy", x = input$xColumn, y = input$yColumn) +
+             theme_minimal(),
+           "bubble" = ggplot(data_df(), aes_string(x = input$xColumn, y = input$yColumn, size = input$yColumn)) +
+             geom_point(alpha = 0.7) +
+             labs(title = "Wykres bąbelkowy", x = input$xColumn, y = input$yColumn) +
+             theme_minimal(),
+           "pie" = plot_ly(data_df(), labels = ~data_df()[[input$xColumn]], values = ~data_df()[[input$yColumn]], type = "pie") %>%
+             layout(title = "Wykres kołowy"),
+           "box" = plot_ly(data_df(), y = ~data_df()[[input$yColumn]], type = "box") %>%
+             layout(title = "Wykres pudełkowy")
+    )
+  }
+  
+  # Reakcja na kliknięcie przycisku "Generuj" w formularzu
+  observeEvent(input$generateChart, {
+    output$generatedChart <- renderPlotly({
+      generateChart(data_df())
+    })
+  })
+}
+
+# Uruchomienie aplikacji Shiny
+shinyApp(ui, server)
